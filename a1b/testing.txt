@@ -1,0 +1,400 @@
+TESTING:
+
+
+
+
+
+inode size:
+	/** Block number (block pointer) type. */
+	typedef uint32_t a1fs_blk_t;
+
+	/** Extent - a contiguous range of blocks. */
+	typedef struct a1fs_extent {
+		/** Starting block of the extent. */
+		a1fs_blk_t start;
+		/** Number of blocks in the extent. */
+		a1fs_blk_t count;
+		/** Number of bits currently in use by this extent*/
+		a1fs_blk_t size;
+
+	} a1fs_extent;
+
+	/** a1fs inode. */
+	typedef struct a1fs_inode {
+		mode_t 			  mode;
+		uint32_t 		  links;
+		uint64_t 		  size;
+		struct timespec   i_mtime;					/* Last modified time */
+		struct timespec   i_atime;      			/* Access time */  
+		struct timespec   i_ctime;       			/* Creation time */  
+		struct timespec   i_dtime;       			/* Deletion Time */  
+		a1fs_extent       i_extent[12];  			/* Pointers to extents */  
+		int8_t 		  	  last_used_extent;			/* Index of Last Used Extent */
+		uint32_t 		  num_entries;				/* Number of entries if directory */
+		uint32_t 		  last_entry_index;			/* Index of last entry if directory */
+		// uint8_t           i_pad[64];	  			/* Padding */
+
+	} a1fs_inode;
+
+	printf("%ld\n", sizeof(a1fs_inode));
+	printf("%ld\n", 256 - sizeof(a1fs_inode));
+
+	return 0;
+
+
+
+
+
+
+
+
+
+
+
+
+
+get_available_bit CASE 0:
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <error.h>
+#include <time.h>
+
+/** Check if bit is in use given its index and the bitmap */
+int check_bit_usage(unsigned int bitmap[2], int index)
+{
+	// Get specific byte containing the bit
+	int byte = index / 8;
+
+	// Get number of bits to left-shift
+	int bit = index % 8;
+
+	// Check if bit in use
+	if (bitmap[byte] & (1 << bit)) {
+		printf("bit %d taken\n", index);
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+int main(int argc, char *argv[]) {
+
+    (void)argc;
+
+	unsigned int bitmap[2] = {0xa1, 0x11};
+
+	// Loop until first available inode is found
+	// and return the corresponding index
+	for (int i = 0; i < 16; i++) {
+		if (!check_bit_usage(bitmap, i)) {
+			printf("RESULT: %d\n", i);
+			// return i;
+		}
+	}
+
+	
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+get_available_bit CASE 1:
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <error.h>
+#include <time.h>
+
+/** Check if bit is in use given its index and the bitmap */
+int check_bit_usage(unsigned int bitmap[2], int index)
+{
+	// Get specific byte containing the bit
+	int byte = index / 8;
+
+	// Get number of bits to left-shift
+	int bit = index % 8;
+
+	// Check if bit in use
+	if (bitmap[byte] & (1 << bit)) {
+		printf("bit %d taken\n", index);
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+int main(int argc, char *argv[]) {
+
+    (void)argc;
+	(void)argv;
+
+	unsigned int bitmap[2] = {0x7f, 0xfc};
+
+	// Calculate the maximum possible index for data
+	int total_blocks = 16;
+	int max_index = total_blocks - 1;
+
+	// Eventually becomes the index of the large-enough and first-fit data bit
+	// Where is this initialized? (1st MTDB)
+	int avail_db_index = 0;
+
+	// The current data block being observed
+	int i = avail_db_index;
+
+	// The current number of contiguous and free data blocks
+	int count = 0;
+	while ((count != 3) && (i < max_index)) {
+
+		printf("yes!\n");
+
+		// Reset count if bit is occupied and increment count if bit is free
+		if (check_bit_usage(bitmap, i)) {
+			count = 0;
+			i += 1;
+			avail_db_index = i;
+		} else {
+			i += 1;
+			count += 1;
+		}
+	}
+
+	if (i == max_index && 3 != 1) {
+		// TODO: break up the extent into smaller size
+		return -ENOENT;
+	} else {
+		printf("RESULT: %d\n", avail_db_index);
+		return avail_db_index;
+	}
+	
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+set_bits CASE 0:
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <error.h>
+#include <time.h>
+
+int main(int argc, char *argv[]) {
+
+    (void)argc;
+	(void)argv;
+
+	unsigned int bitmap[2] = {0xa1, 0x11};
+
+	int index = 9;
+
+	// Get specific byte containing the inode
+	int byte = index / 8;
+
+	// Get number of bits to left-shift
+	int bit = index % 8;
+
+	// Set corresponding inode bit
+	// https://www.codesdope.com/blog/article/set-toggle-and-clear-a-bit-in-c/
+	bitmap[byte] ^= (1 << bit);
+
+	printf("first byte: %x\n", bitmap[0]);
+	printf("2nd byte:   %x\n", bitmap[1]);
+
+	return 0;
+	
+
+
+
+
+
+
+
+set_bits CASE 1:
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <error.h>
+#include <time.h>
+
+int main(int argc, char *argv[]) {
+
+    (void)argc;
+	(void)argv;
+
+
+
+	unsigned int bitmap[2] = {0x71, 0x10};
+
+	int index = 7;
+	int extent_size = 4;
+
+	for (int i = index; i < extent_size + index; i++) {
+		// Get specific byte containing the inode
+		int byte = i / 8;
+
+		// Get number of bits to left-shift
+		int bit = i % 8;
+
+		// Set corresponding inode bit
+		// https://www.codesdope.com/blog/article/set-toggle-and-clear-a-bit-in-c/
+		bitmap[byte] ^= (1 << bit);
+	}
+
+	printf("first byte: %x\n", bitmap[0]);
+	printf("2nd byte:   %x\n", bitmap[1]);
+
+	return 0;
+	
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+OLD ALLOCATE blocks	// (void)data_index;
+	// // Get the last used extent in the inode ( it might not exist!!)
+	// int index_of_last_used_extent = fs_context->itable[inode_index].last_used_extent;
+	// // if it doesn't exist, just find an extent for it
+	// if (index_of_last_used_extent == -1){
+	// 	//typical allocation
+	// 	for(int i = 0; i < fs_context->sb->sb_total_data_blocks; i++){
+	// 		// for the first empty bit, allocate, and break out
+	// 		if(!check_bit_usage(fs_context->block_bits, i)) {
+	// 			//set the respective bit in data bitmap
+	// 			set_bits(fs_context->sb, fs_context->block_bits, i, 1, 1);
+	// 			//add new extent to inode 
+	// 			fs_context->itable[inode_index].i_extent[0].start = i + fs_context->sb->sb_first_data_block;
+	// 			fs_context->itable[inode_index].i_extent[0].count = 1;
+	// 			return 0;
+	// 		}
+	// 	}
+	// }
+	// a1fs_extent last_used_extent = fs_context->itable[inode_index].i_extent[index_of_last_used_extent];
+
+	// // We will first attempt to add onto the last extent, then if it doesn't fit, we will
+
+	// // Calculate 'index' of the end of this extent (ie. 6, for the 6th data block in the bitmap sense)
+	// int index_of_end_of_last_used_extent = last_used_extent.start + last_used_extent.count;
+	// int remaining_size = extent_size;
+	// // then for the extent size, we add as we go
+	// for (int i = 0; i < extent_size; i++){
+	// 	//if bit not in use
+	// 	if(!check_bit_usage(fs_context->block_bits, i + index_of_end_of_last_used_extent)) {
+	// 		//update extent length, update remaining extent size, update bitmap
+	// 		// featuring thread unsafe increments xd
+	// 		fs_context->itable[inode_index].i_extent[index_of_last_used_extent].count++;
+	// 		// update extent size
+	// 		remaining_size = remaining_size - 1;
+	// 		// flip single bit on the bitmap using parameters (extent size 1)
+	// 		set_bits(fs_context->sb, fs_context->block_bits, i, 1, 1);
+	// 	}else {
+	// 	//else the bit is used, and we need to find a new extent space , so lets break out of here first
+	// 		break;
+	// 	}
+	// }
+	// // if we've gotten here, either we've fully allocated or there are some blocks left
+	// // if remaining size is > 0, then there are some blocks left, so we should find a new extent
+	// // this needs to be a loop for reasons to be explained later...
+
+	// //reassign this...
+	// index_of_last_used_extent = fs_context->itable[inode_index].last_used_extent;
+	// //set to 1 if indirect needs to be initialized
+	// // int indirect = 0;
+	// // if (index_of_last_used_extent == 11){
+	// // 	indirect = 1;
+	// // }
+	// while (remaining_size > 0){
+	// 	// we should also check if the inode even has spaces left, if not (first 11 extent slots occupied), check if there is an 
+	// 	// indirect block, and update accordingly 
+	// 	// if less than 11, implies that not all regular extent slots are filled yet, proceed as normal 
+	// 	if (index_of_last_used_extent < 11){
+	// 		//increment the last used exent
+	// 		fs_context->itable[index_of_last_used_extent].last_used_extent++;
+	// 		// we will do a first-fit algorithm, to find the first extent size that fits our needs.
+	// 		// as we're going, lets also check the bitmap for total number of empty spaces, that way
+	// 		// if we don't find a big enough space, we know for sure if we're able to at least break up the extent into smaller sizes
+			
+	// 		// this the algorithm to fit size 1 extent 
+	// 		for(int i = 0; i < fs_context->sb->sb_total_data_blocks; i++){
+	// 		// for the first empty bit, allocate, and break out
+	// 			if(!check_bit_usage(fs_context->block_bits, i)) {
+	// 				//set the respective bit in data bitmap
+	// 				set_bits(fs_context->sb, fs_context->block_bits, i, 1, 1);
+	// 				//add new extent to inode 
+	// 				fs_context->itable[inode_index].i_extent[fs_context->itable[index_of_last_used_extent].last_used_extent].start = i + fs_context->sb->sb_first_data_block;
+	// 				fs_context->itable[inode_index].i_extent[fs_context->itable[index_of_last_used_extent].last_used_extent].count = 1;
+	// 				break;
+	// 			}
+	// 		}
+	// 	}else {
+	// 		// the single indirect block is in use, and we need to check if it has been initialized, if not, make it, and then insert
+	// 		// if it exists, we find the first available slot to add our extent entry
+	// 		// if (indirect == 0){ //then the indirect block already exists
+
+	// 		// 	for(int i = 0; i < fs_context->sb->sb_total_data_blocks; i++){
+	// 		// 	// for the first empty bit, allocate, and break out
+	// 		// 		if(!check_bit_usage(fs_context->block_bits, i)) {
+	// 		// 			//set the respective bit in data bitmap
+	// 		// 			set_bits(fs_context->sb, fs_context->block_bits, i, 1, 1);
+	// 		// 			//add new extent to inode 
+	// 		// 			fs_context->itable[inode_index].i_extent[12].start = i + fs_context->sb->sb_first_data_block;
+	// 		// 			fs_context->itable[inode_index].i_extent[12].count = 1;
+	// 		// 		}
+	// 		// 	}
+	// 		// }else{// we need to create the indirect block
+	// 		// 	for(int i = 0; i < fs_context->sb->sb_total_data_blocks; i++){
+	// 		// 	// for the first empty bit, allocate, and break out
+	// 		// 		if(!check_bit_usage(fs_context->block_bits, i)) {
+	// 		// 			//set the respective bit in data bitmap
+	// 		// 			set_bits(fs_context->sb, fs_context->block_bits, i, 1, 1);
+	// 		// 			//add new extent to inode
+	// 		// 			a1fs_extent extent = (struct a1fs_extent) fs_context->image[fs_context->itable[inode_index].i_extent[12].start] 
+	// 		// 			fs_context->itable[inode_index].i_extent[12].start = i + fs_context->sb->sb_first_data_block;
+	// 		// 			fs_context->itable[inode_index].i_extent[12].count = 1;
+	// 		// 		}
+	// 		// 	}				
+	// 		// }
+	// 	}
+
+	// }
