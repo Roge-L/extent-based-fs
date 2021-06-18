@@ -69,6 +69,12 @@ static inline bool check_bit_usage(unsigned char* bitmap, int index)
 static inline int get_available_bit(a1fs_superblock *sb, unsigned char *bitmap, int bm_type, int extent_size)
 {
 
+	// Not enough disk space
+	if (sb->sb_free_blocks_count < extent_size) {
+		fprintf(stderr, "util.h: get_available_bit: insufficient disk space\n");
+		return -1;
+	}
+
 	// Find available inode
 	if (bm_type == 0) {
 		// Return -1 if no free inodes
@@ -112,9 +118,9 @@ static inline int get_available_bit(a1fs_superblock *sb, unsigned char *bitmap, 
 			}
 		}
 
+		// Check if there is no contiguous space for the full extent size
 		if (i == max_index && extent_size != 1) {
-			// TODO: break up the extent into smaller size
-			return -ENOENT;
+			return -1;
 		} else {
 			return avail_db_index;
 		}
@@ -124,8 +130,8 @@ static inline int get_available_bit(a1fs_superblock *sb, unsigned char *bitmap, 
 	return -1;
 }
 
-/** Set the bits in the bitmap; 0 for inode bitmap, 1 for data bitmap */
-static inline int set_bits(a1fs_superblock *sb, unsigned char *bitmap, int index, int bm_type, int extent_size) {
+/** Flip the bits in the bitmap; bm_type 0 for inode bitmap, 1 for data bitmap; flip_type 0 for setting to 0 and 1 for setting to 1 */
+static inline int set_bits(a1fs_superblock *sb, unsigned char *bitmap, int index, int bm_type, int extent_size, int flip_type) {
 
 	if (bm_type == 0) {
 		// Get specific byte containing the inode
@@ -135,12 +141,15 @@ static inline int set_bits(a1fs_superblock *sb, unsigned char *bitmap, int index
 		int bit = index % 8;
 
 		// Set corresponding inode bit
-		// https://www.codesdope.com/blog/article/set-toggle-and-clear-a-bit-in-c/
 		bitmap[byte] ^= (1 << bit);
 
 		// Update superblock
-		sb->sb_free_inodes_count -= 1;
-
+		if (flip_type == 0) {
+			sb->sb_free_inodes_count += 1;
+		} else {
+			sb->sb_free_inodes_count -= 1;
+		}
+		
 		return 0;
 	} else if (bm_type == 1) {
 		for (int i = index; i < extent_size + index; i++) {
@@ -151,11 +160,15 @@ static inline int set_bits(a1fs_superblock *sb, unsigned char *bitmap, int index
 			int bit = i % 8;
 
 			// Set corresponding data bit(s)
-			// https://www.codesdope.com/blog/article/set-toggle-and-clear-a-bit-in-c/
 			bitmap[byte] ^= (1 << bit);
 
 			// Update superblock
-			sb->sb_free_blocks_count -= 1;
+			if (flip_type == 0) {
+				sb->sb_free_blocks_count += 1;
+			} else {
+				sb->sb_free_blocks_count -= 1;
+			}
+
 		}
 
 		return 0;
@@ -174,6 +187,7 @@ static inline bool create_inode(a1fs_inode* itable, int index, mode_t mode) {
     clock_gettime(CLOCK_REALTIME, &curr_time);
 	itable[index].i_mtime = curr_time;
     itable[index].last_used_extent = -1;
+	itable[index].last_used_indirect = -1;
 	itable[index].num_entries = 0;
 
 	return true;

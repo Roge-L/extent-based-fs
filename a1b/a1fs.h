@@ -54,7 +54,7 @@ typedef struct a1fs_superblock {
 
 	uint8_t   sb_first_data_block;  /* Index of first data block */
 	uint8_t	  sb_first_empty_db;	/* Index of first empty data block */
-	uint8_t	  sb_total_data_blocks;  /* Total data block counts */
+	uint8_t	  sb_total_data_blocks; /* Total data block counts */
 	uint8_t   sb_block_bitmap;      /* Index of blocks bitmap block */
 	uint8_t   sb_inode_bitmap;      /* Index of inodes bitmap block */
 	uint8_t   sb_inode_table;       /* Index of inodes table block */
@@ -75,9 +75,9 @@ typedef struct a1fs_extent {
 	/** Starting block of the extent. */
 	a1fs_blk_t start;
 	/** Number of blocks in the extent. */
-	a1fs_blk_t count;
-	/** Number of bits currently in use by this extent*/
-	a1fs_blk_t size;
+	int32_t count;
+	/** Number of bytes currently in use by this extent*/
+	int32_t size;
 
 } a1fs_extent;
 
@@ -86,11 +86,11 @@ typedef struct a1fs_extent {
 typedef struct a1fs_inode {
 	mode_t 			  mode;
 	uint32_t 		  links;
-	uint64_t 		  size;						/* Number of blocks used */
+	uint64_t 		  size;						/* Number of bytes used */
 	struct timespec   i_mtime;					/* Last modified time */
     a1fs_extent       i_extent[12];  			/* Pointers to extents */  
 	int32_t 		  last_used_extent;			/* Index of Last Used Extent */
-	uint32_t		  last_used_indirect;
+	int32_t		  	  last_used_indirect;
 	uint32_t 		  num_entries;				/* Number of entries if directory */
 	uint8_t           i_pad[64];	  			/* Padding */
 

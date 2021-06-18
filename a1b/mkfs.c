@@ -216,7 +216,7 @@ static bool mkfs(void *image, size_t size, mkfs_opts *opts)
 	}
 
 	// Set corresponding inode bit in inode bitmap
-	if (set_bits(sb, inode_bits, root_inode_index, 0, -1) < 0) {
+	if (set_bits(sb, inode_bits, root_inode_index, 0, -1, 1) < 0) {
 		printf("%d\n", root_inode_index);
 		fprintf(stderr, "mkfs: could not set inode bit for root directory\n");
 		return false;
@@ -234,7 +234,7 @@ static bool mkfs(void *image, size_t size, mkfs_opts *opts)
     clock_gettime(CLOCK_REALTIME, &curr_time);
 	itable[root_inode_index].i_mtime = curr_time;
 	itable[root_inode_index].last_used_extent = -1;
-	itable[root_inode_index].links = 0;
+	itable[root_inode_index].links = 2;
 	itable[root_inode_index].num_entries = 0;
 	itable[root_inode_index].size = sizeof(itable[root_inode_index]);
 

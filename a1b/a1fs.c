@@ -115,7 +115,7 @@ static int a1fs_statfs(const char *path, struct statvfs *st)
 
 	// Fill the first <sizeof(*st)> bytes with constant byte 0
 	// of the memory pointed to by <st>
-	if (memset(st, 0, sizeof(*st)) == NULL) {
+	if (memset(st, '\0', sizeof(*st)) == NULL) {
 		return -errno;
 	}
 
@@ -172,14 +172,14 @@ static int a1fs_getattr(const char *path, struct stat *st)
 
 	// Fill the first <sizeof(*st)> bytes with constant byte 0
 	// of the memory pointed to by <st>
-	if (memset(st, 0, sizeof(*st)) == NULL) {
+	if (memset(st, '\0', sizeof(*st)) == NULL) {
 		return -errno;
 	}
 
 	// Get the inode number of the given path
 	int curr_inode = get_inode_num(fs, path, 0);
 	if (curr_inode < 0) {
-		return -errno;
+		return -ENOENT;
 	}
 
 	// Fill in the required fields based on inode information
@@ -189,7 +189,7 @@ static int a1fs_getattr(const char *path, struct stat *st)
 	st->st_blocks = fs->itable[curr_inode].size/512 
 		+ sizeof(fs->itable[curr_inode]);				/* Number of 512B blocks allocated */
 	st->st_mtim = fs->itable[curr_inode].i_mtime;		/* Time of last modification */
-	
+
 	return 0;
 }
 
@@ -238,7 +238,7 @@ static int a1fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
 
 	// Find the path's directory entry and call the filler function on all of its named children;
-	// TODO: account for the case that we begin using the single indirect block
+	// TODO: indirect case
 	// Loop through every used extent in the corresponding directory's inode
 	for (int i = 0; i <= (int)fs->itable[curr_inode].last_used_extent; i++){
 
@@ -251,9 +251,8 @@ static int a1fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 			for(int k = 0; k < A1FS_BLOCK_SIZE; k += sizeof(a1fs_dentry)){
 
 				// Call filler function if a non-empty entry is found
-				// TODO: Verify that empty directory entries have initially null-terminated names
-				if( ((a1fs_dentry *)(fs->image + A1FS_BLOCK_SIZE*j + k))->name[0] != '\0'){
-					filler(buf, ((a1fs_dentry *)(fs->image + A1FS_BLOCK_SIZE*j + k))->name, NULL, 0);
+				if( ((a1fs_dentry *)(fs->image + (A1FS_BLOCK_SIZE * j) + (A1FS_BLOCK_SIZE * fs->sb->sb_first_data_block) + k))->name[0] != '\0'){
+					filler(buf, ((a1fs_dentry *)(fs->image + (A1FS_BLOCK_SIZE * j) + (A1FS_BLOCK_SIZE * fs->sb->sb_first_data_block) + k))->name, NULL, 0);
 				}
 			}
 		}
@@ -302,7 +301,7 @@ static int a1fs_mkdir(const char *path, mode_t mode)
 	}
 
 	// Set corresponding inode bit in inode bitmap
-	if (set_bits(fs->sb, fs->inode_bits, newdir_inode_index, 0, -1) < 0) {
+	if (set_bits(fs->sb, fs->inode_bits, newdir_inode_index, 0, -1, 1) < 0) {
 		fprintf(stderr, "a1fs_mkdir: could not set inode bit for new directory\n");
 		return -errno;
 	}
@@ -311,25 +310,24 @@ static int a1fs_mkdir(const char *path, mode_t mode)
 	create_inode(fs->itable, newdir_inode_index, mode);
 
 	// Get name of the new directory
-	char *new_dir_name = strchr(path, '/') + 1;
+	char *new_dir_name = strrchr(path, '/') + 1;
 
 	// Get the parent's inode number
-	int parent_inode_num;
+	int par_inode;
 	if (new_dir_name == NULL) {
-		parent_inode_num = 0;
+		par_inode = 0;
 	} else {
 		// Get the inode number of the parent directory
 		// Note that this should return 0 if the path is similar to '/dir'
-		parent_inode_num = get_inode_num(fs, path, 1);
-		if (parent_inode_num < 0) {
+		par_inode = get_inode_num(fs, path, 1);
+		if (par_inode < 0) {
 			fprintf(stderr, "a1fs_mkdir: parent inode number could not be retrieved\n");
 			return -ENOENT;
 		}
 	}
 
-
 	// Add directory entry to the parent directory
-	if (add_dentry(fs, parent_inode_num, newdir_inode_index, new_dir_name) < 0) {
+	if (add_dentry(fs, par_inode, newdir_inode_index, new_dir_name) < 0) {
 		fprintf(stderr, "a1fs_mkdir: failed to add directory entry to parent inode\n");
 		return -errno;
 	}
@@ -375,7 +373,7 @@ static int a1fs_rmdir(const char *path)
 
 	// Flip corresponding inode bit in inode bitmap
 	if (check_bit_usage(fs->inode_bits, ino_to_rm)) {
-		if (set_bits(fs->sb, fs->inode_bits, ino_to_rm, 0, -1) < 0) {
+		if (set_bits(fs->sb, fs->inode_bits, ino_to_rm, 0, -1, 0) < 0) {
 			fprintf(stderr, "a1fs_rmdir: could not flip inode bit\n");
 			return -errno;
 		}
@@ -385,7 +383,7 @@ static int a1fs_rmdir(const char *path)
 	}
 
 	// Get name of the directory to be removed
-	char *dir_to_rm_name = strchr(path, '/') + 1;
+	char *dir_to_rm_name = strrchr(path, '/') + 1;
 
 	// Get the parent's inode number
 	int parent_inode_num;
@@ -401,6 +399,7 @@ static int a1fs_rmdir(const char *path)
 		}
 	}
 
+	// TODO: indirect case
 	// Reset the directory entry of the directory to be removed
 	int first_data_block = fs->sb->sb_first_data_block;
 	// Loop through every used extent in the corresponding directory's inode. 
@@ -411,9 +410,9 @@ static int a1fs_rmdir(const char *path)
 		for( int j = start; j < start + length; j++) {
 			// Loop through every directory entry in the current block
 			for(int k = 0; k < A1FS_BLOCK_SIZE; k += sizeof(a1fs_dentry)){
-				if( ((a1fs_dentry *)(fs->image + A1FS_BLOCK_SIZE*(j+first_data_block) + k))->ino == ino_to_rm){
-					((a1fs_dentry *)(fs->image + A1FS_BLOCK_SIZE*(j+first_data_block) + k))->ino = -1;
-					((a1fs_dentry *)(fs->image + A1FS_BLOCK_SIZE*(j+first_data_block) + k))->name[0] = '\0';
+				if( ((a1fs_dentry *)(fs->image + (A1FS_BLOCK_SIZE * j) + (A1FS_BLOCK_SIZE * first_data_block) + k))->ino == ino_to_rm){
+					((a1fs_dentry *)(fs->image + (A1FS_BLOCK_SIZE * j) + (A1FS_BLOCK_SIZE * first_data_block) + k))->ino = -1;
+					((a1fs_dentry *)(fs->image + (A1FS_BLOCK_SIZE * j) + (A1FS_BLOCK_SIZE * first_data_block) + k))->name[0] = '\0';
 
 					// Update metadata
 					struct timespec curr_time;
@@ -422,6 +421,7 @@ static int a1fs_rmdir(const char *path)
 					fs->itable[parent_inode_num].num_entries -= 1;
 					fs->itable[parent_inode_num].links -= 1;
 					fs->sb->sb_used_dirs_count -= 1;
+					fs->sb->sb_free_blocks_count += 1;
 
 					return 0;
 				}
@@ -429,7 +429,7 @@ static int a1fs_rmdir(const char *path)
 		}	
 	}
 
-	return -1;
+	return -errno;
 }
 
 /**
@@ -468,7 +468,7 @@ static int a1fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 	}
 
 	// Set corresponding inode bit in inode bitmap
-	if (set_bits(fs->sb, fs->inode_bits, new_inode_index, 0, -1) < 0) {
+	if (set_bits(fs->sb, fs->inode_bits, new_inode_index, 0, -1, 1) < 0) {
 		fprintf(stderr, "a1fs_create: could not set inode bit for new file\n");
 		return -errno;
 	}
@@ -477,7 +477,7 @@ static int a1fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 	create_inode(fs->itable, new_inode_index, mode);
 
 	// Get name of the file to be created
-	char *new_file_name = strchr(path, '/') + 1;
+	char *new_file_name = strrchr(path, '/') + 1;
 
 	// Get the parent's inode number
 	int parent_inode_num;
@@ -488,14 +488,14 @@ static int a1fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 		// Note that this should return 0 if the path is similar to '/dir'
 		parent_inode_num = get_inode_num(fs, path, 1);
 		if (parent_inode_num < 0) {
-			fprintf(stderr, "a1fs_rmdir: parent inode number could not be retrieved\n");
+			fprintf(stderr, "a1fs_create: parent inode number could not be retrieved\n");
 			return -errno;
 		}
 	}
 
 	// Add directory entry to the parent directory
 	if (add_dentry(fs, parent_inode_num, new_inode_index, new_file_name) < 0) {
-		fprintf(stderr, "a1fs_mkdir: failed to add directory entry to parent inode\n");
+		fprintf(stderr, "a1fs_create: failed to add directory entry to parent inode\n");
 		return -errno;
 	}
 
@@ -526,8 +526,8 @@ static int a1fs_unlink(const char *path)
 	if (fs->itable[ino_to_rm].size != 0 || fs->itable[ino_to_rm].last_used_extent != -1) {
 		for (int i = 0; i <= (int)fs->itable[ino_to_rm].last_used_extent; i++) {
 			// Flip corresponding data bit(s) in data bitmap
-			if (check_bit_usage(fs->block_bits, s->itable[ino_to_rm].i_extent[i].start)) {
-				if (set_bits(fs->sb, fs->block_bits, fs->itable[ino_to_rm].i_extent[i].start, 1, fs->itable[ino_to_rm].i_extent[i].count); < 0) {
+			if (check_bit_usage(fs->block_bits, fs->itable[ino_to_rm].i_extent[i].start)) {
+				if (set_bits(fs->sb, fs->block_bits, fs->itable[ino_to_rm].i_extent[i].start, 1, fs->itable[ino_to_rm].i_extent[i].count, 0) < 0) {
 					fprintf(stderr, "a1fs_unlink: could not flip data bit(s)\n");
 					return -errno;
 				}
@@ -550,7 +550,7 @@ static int a1fs_unlink(const char *path)
 
 	// Flip corresponding inode bit in inode bitmap
 	if (check_bit_usage(fs->inode_bits, ino_to_rm)) {
-		if (set_bits(fs->sb, fs->inode_bits, ino_to_rm, 0, -1) < 0) {
+		if (set_bits(fs->sb, fs->inode_bits, ino_to_rm, 0, -1, 0) < 0) {
 			fprintf(stderr, "a1fs_unlink: could not flip inode bit\n");
 			return -errno;
 		}
@@ -560,7 +560,7 @@ static int a1fs_unlink(const char *path)
 	}
 
 	// Get name of the file to be removed
-	char *file_to_rm_name = strchr(path, '/') + 1;
+	char *file_to_rm_name = strrchr(path, '/') + 1;
 
 	// Get the parent's inode number
 	int parent_inode_num;
@@ -576,6 +576,7 @@ static int a1fs_unlink(const char *path)
 		}
 	}
 
+	// TODO: indirect case
 	// Reset the directory entry of the directory to be removed
 	int first_data_block = fs->sb->sb_first_data_block;
 	// Loop through every used extent in the corresponding directory's inode. 
@@ -586,9 +587,9 @@ static int a1fs_unlink(const char *path)
 		for( int j = start; j < start + length; j++) {
 			// Loop through every directory entry in the current block
 			for(int k = 0; k < A1FS_BLOCK_SIZE; k += sizeof(a1fs_dentry)){
-				if( ((a1fs_dentry *)(fs->image + A1FS_BLOCK_SIZE*(j+first_data_block) + k))->ino == ino_to_rm){
-					((a1fs_dentry *)(fs->image + A1FS_BLOCK_SIZE*(j+first_data_block) + k))->ino = -1;
-					((a1fs_dentry *)(fs->image + A1FS_BLOCK_SIZE*(j+first_data_block) + k))->name[0] = '\0';
+				if( ((a1fs_dentry *)(fs->image + (A1FS_BLOCK_SIZE * j) + (A1FS_BLOCK_SIZE * first_data_block) + k))->ino == ino_to_rm){
+					((a1fs_dentry *)(fs->image + (A1FS_BLOCK_SIZE * j) + (A1FS_BLOCK_SIZE * first_data_block) + k))->ino = -1;
+					((a1fs_dentry *)(fs->image + (A1FS_BLOCK_SIZE * j) + (A1FS_BLOCK_SIZE * first_data_block) + k))->name[0] = '\0';
 
 					// Update metadata
 					struct timespec curr_time;
@@ -596,6 +597,7 @@ static int a1fs_unlink(const char *path)
 					fs->itable[parent_inode_num].i_mtime = curr_time;
 					fs->itable[parent_inode_num].num_entries -= 1;
 					fs->itable[parent_inode_num].links -= 1;
+					fs->sb->sb_free_blocks_count += 1;
 
 					return 0;
 				}
@@ -603,7 +605,7 @@ static int a1fs_unlink(const char *path)
 		}	
 	}
 
-	return -1;
+	return -errno;
 
 
 }
@@ -630,13 +632,15 @@ static int a1fs_utimens(const char *path, const struct timespec times[2])
 {
 	fs_ctx *fs = get_fs();
 
-	//TODO: update the modification timestamp (mtime) in the inode for given
+	// Update the modification timestamp (mtime) in the inode for given
 	// path with either the time passed as argument or the current time,
 	// according to the utimensat man page
-	(void)path;
-	(void)times;
-	(void)fs;
-	return -ENOSYS;
+	int inode_num = get_inode_num(fs, path, 0);
+	if (inode_num < 0) {
+		return -errno;
+	}
+	fs->itable[inode_num].i_mtime = times[1];
+	return 0;
 }
 
 /**
@@ -661,138 +665,179 @@ static int a1fs_truncate(const char *path, off_t size)
 {
 	fs_ctx *fs = get_fs();
 
-	//TODO: set new file size, possibly "zeroing out" the uninitialized range
-
-	// how do we do this? 
-	//first we should grab file size, then compare with the size we want
-	// if size we want is bigger than file size, then we will need to determine how big of an extent
-	// to give and allocate it as such
-	// if size we want is smaller than current size, then we will need to go through and remove 
-	// extents as required
-	// every step we shall update total size of file, until we have reached the destination (0)
-
-	// get the inode index of the file we want, and grab its size
 	int cur_inode = get_inode_num(fs, path, 0);
 	int cur_size = fs->itable[cur_inode].size;
-	int firstdata = fs->sb->sb_first_data_block*A1FS_BLOCK_SIZE;
-	//if wanted size is same as target size, return no changes (still success)
+
+	// Succeed if current size is wanted size
 	if (cur_size == size){
 		return 0;
 	}
-	// if the target size is greater than our current size...
-	int diff = size - cur_size;
-	if (diff > 0){
-		// then we want to 
-		//	a. fill up our last extent to the max
-		// 	b. make another extent if there are leftovers
-		int last_extent = fs->itable[cur_inode].last_used_extent;
-		
 
-		// if the last extent isn't filled up...
-		if ((int)fs->itable[cur_inode].i_extent[last_extent].size != (int)fs->itable[cur_inode].i_extent[last_extent].count * A1FS_BLOCK_SIZE) {
-			for (int i = 0; i < (int)fs->itable[cur_inode].i_extent[last_extent].size; i++){
-				//set all remaining in extent to zero 
-				// SUSPICIOUS CODE
-				int offset = A1FS_BLOCK_SIZE*(fs->sb->sb_first_data_block) + (int)fs->itable[cur_inode].i_extent[last_extent].start*A1FS_BLOCK_SIZE;
-				unsigned char* bit = (unsigned char*)(fs->image + offset);
-				bit[i/8] = ~(1 << (i%8));
-				//increment remaining difference each time, as well as the size of the extent
-				diff--;
-				fs->itable[cur_inode].i_extent[last_extent].size = fs->itable[cur_inode].i_extent[last_extent].size + 1;
+	// 1. Case that the file is empty
+	if (fs->itable[cur_inode].last_used_extent == -1) {
+
+		fprintf(stderr, "\na1fs_truncate: case empty file\n");
+
+		// Handle the empty file case
+		if (truncate_helper(fs, cur_inode, size) < 0) {
+			fprintf(stderr, "a1fs_truncate: truncate_helper failed for the empty file case\n");
+			return -errno;
+		}
+
+		// Initialize and set the inode size
+		fs->itable[cur_inode].size = size;
+
+		return 0;
+	}
+	
+	// 2. Case that we extend the file
+	if (cur_size < size) {
+
+		fprintf(stderr, "\na1fs_truncate: current inode size = %d\n", cur_size);
+		
+		// Number of data blocks the inode is currently using (floored though)
+		int num_blocks = cur_size / A1FS_BLOCK_SIZE;
+
+		fprintf(stderr, "\na1fs_truncate: num_blocks = %d\n", num_blocks);
+
+		// The number of bytes of the last data block of the inode
+		int leftover_bytes = cur_size - (num_blocks * A1FS_BLOCK_SIZE);
+
+		fprintf(stderr, "\na1fs_truncate: leftover_bytes = %d\n", leftover_bytes);
+
+		// The number of bytes until the last data block of the inode is full (divisible by A1FS_BLOCK_SIZE)
+		int bytes_til_full = A1FS_BLOCK_SIZE - leftover_bytes;
+
+		fprintf(stderr, "\na1fs_truncate: bytes_til_full = %d\n", bytes_til_full);
+
+
+		// A. Case that the new size cannot fill up the last data block of the inode
+		if (size < bytes_til_full) {
+
+			fprintf(stderr, "\na1fs_truncate: case new size cannot fill up last DB\n");
+
+			if (truncate_helper(fs, cur_inode, size) < 0) {
+				fprintf(stderr, "a1fs_truncate: case extension; case not filler; failed truncate_helper\n");
+				return -errno;
 			}
-		} 
-		//once that's done, we know that we must check for leftovers, if leftover is still greater than zero, figure
-		// out how big of an extent we need and allocate, else do nothing
-		if (diff >0) {
-			//this hopefully yields a whole number, but will be how many blocks we need
-			int check = diff / (int)A1FS_BLOCK_SIZE;
-			// then we've found how big of an extent we need, so we call our allocation algorithm
-			if (allocate_data_blks(fs, cur_inode, fs->sb->sb_first_data_block, check, 0) < 0) {
-				return -1;
+
+			// Update the inode size
+			int bytes_added = size - cur_size;
+			fs->itable[cur_inode].size += size - cur_size;
+
+			fprintf(stderr, "\na1fs_truncate: added %d bytes to inode\n", bytes_added);
+
+			return 0;
+		}
+
+		// B. Case that the new size can fill up the last data block of the inode 
+		if (size > bytes_til_full) {
+
+			fprintf(stderr, "\na1fs_truncate: case new size can fill up last DB\n");
+			
+			// The number of remaining bytes to truncate
+			int remaining_bytes = size - fs->itable[cur_inode].size;
+
+			// TODO: indirect case
+			int last_db_index = fs->itable[cur_inode].i_extent[fs->itable[cur_inode].last_used_extent].start 
+								+ fs->itable[cur_inode].i_extent[fs->itable[cur_inode].last_used_extent].count
+								- 1;
+			
+			// Get the corresponding data block address
+			unsigned char * db_addr = (unsigned char *)(fs->image 
+														+ (A1FS_BLOCK_SIZE * last_db_index) 
+														+ (A1FS_BLOCK_SIZE * fs->sb->sb_first_data_block)
+														+ (leftover_bytes));
+			
+			// Zero out the last existing DB
+			if (memset(db_addr, '\0', bytes_til_full) == NULL) {
+				fprintf(stderr, "a1fs_truncate: case extension; case filler; failed to memset\n");
+				return -ENOMEM;
 			}
-			// when allocation is complete, increment the index of last extent in inode
-			fs->itable[cur_inode].last_used_extent += 1;
-			last_extent ++;
-			//then loop through our newly created extent blocks and set all to zero
-			//for each block in the last extent...
-			for (int i = 0; i < (int)fs->itable[cur_inode].i_extent[last_extent].count; i++){
-				//for each bit in the block
-				for (int j = 0; j < A1FS_BLOCK_SIZE; j++){
-					//set each increment to zero
-					// SUSPICIOUS don't need to?
-					// clear bit
-					int offset = A1FS_BLOCK_SIZE*((int)fs->sb->sb_first_data_block) + i*A1FS_BLOCK_SIZE;
-					unsigned char* bit = (unsigned char*)(fs->image + offset);
-					bit[j/8] = ~(1 << (j%8));
-					diff--;
-					fs->itable[cur_inode].i_extent[last_extent].size = fs->itable[cur_inode].i_extent[last_extent].size + 1;
+
+			fprintf(stderr, "\na1fs_helper: just zeroed out %d bytes at index %d\n", bytes_til_full, last_db_index + fs->sb->sb_first_data_block);
+			remaining_bytes = remaining_bytes - bytes_til_full;
+
+			// Case that more bytes must be zeroed
+			if (remaining_bytes != 0) {
+				if (truncate_helper(fs, cur_inode, remaining_bytes) < 0) {
+					fprintf(stderr, "a1fs_truncate: case extension; case filler; case more bytes to be zeroed; truncate helper failed\n");
+					return -errno;
 				}
+			}
+
+			// Update the inode size
+			int bytes_added = size - fs->itable[cur_inode].size;
+			fs->itable[cur_inode].size += bytes_added;
+
+			fprintf(stderr, "\na1fs_truncate: added %d bytes to inode\n", bytes_added);
+
+			return 0;
+		}
+	}
+	
+	// 3. Case that we shrink the file
+	if (cur_size > size) {
+
+		// Number of data blocks that the inode is using
+		int ino_db_num = cur_size / A1FS_BLOCK_SIZE;
+		if (cur_size % A1FS_BLOCK_SIZE != 0) {
+			ino_db_num += 1;
+		}
+
+		// Number of data blocks we wish to end up with
+		int db_desired_num = size / A1FS_BLOCK_SIZE;
+		if (size % A1FS_BLOCK_SIZE != 0) {
+			db_desired_num += 1;
+		}
+
+		// Number of data blocks to unlink
+		int num_db_to_unlink = ino_db_num - db_desired_num;
+
+		// Flip the corresponding data bits to 0
+		// Loop through every used extent backwards in the corresponding inode.
+		for (int i = (int)fs->itable[cur_inode].last_used_extent; i >= 0; i--) {
+
+			// Break out of loop if corresponding data blocks are unlinked
+			if (num_db_to_unlink == 0) {
+				break;
 			}
 			
-		}
-	}else {
-		//its smaller than we expected, so we need to chop off some extents so it'll fit...
-		// flip diff to positive so its easier to deal with
-		diff = diff * -1;
-		// we want to go through the extents, and begin removing until diff is satisfied
-		// first check if we need to deal with indirect block
-		if (fs->itable[cur_inode].last_used_extent == 12){
-			//since we need to deal with the indirect, lets loop through all of its elements backwards
-			for(int i = fs->itable[cur_inode].last_used_indirect*sizeof(a1fs_extent); i > 0; i -= sizeof(a1fs_extent) ){
-				int start = fs->itable[cur_inode].i_extent[12].start;
-				a1fs_extent* cur_extent = (a1fs_extent*)(fs->image + start*A1FS_BLOCK_SIZE +firstdata + i);
-				// if the remaining difference is less than the size...
-				if (diff < (int)cur_extent->size){
-					//since it is less, then we can just shave if off from the extent...
-					//first check how many blocks there are 
-					int blocks = diff/A1FS_BLOCK_SIZE;
-					int bits = diff % A1FS_BLOCK_SIZE;
-					fs->itable[cur_inode].size -= diff;
-					//this should be able to take diff to 0, ut not a negative number... hopefully
-					diff -= cur_extent->size;
-					cur_extent->count -= blocks;
-					cur_extent->size -= bits;
-					//change diff value to zero and break out;
+			// Loop through every block in the current extent in reverse order
+			int start = fs->itable[cur_inode].i_extent[i].start;
+			int length = fs->itable[cur_inode].i_extent[i].count;
+			for( int j = start + length - 1; j >= start; j--) {
+
+				// Break out of loop if corresponding blocks are all zeroed out
+				if (num_db_to_unlink == 0) {
 					break;
-				}else {
-					//otherwise, its greater than the current extent, so delete the current extent and increment
-					fs->itable[cur_inode].size -= cur_extent->size;
-					cur_extent->start = -1;
-					diff -= cur_extent->size;
-					cur_extent->size = 0;
-					cur_extent->count = -1; 
 				}
-			}
-		}
-		//get running index of last used extent, at the end of previous operation, diff is not guaranteed to be zero, so we 
-		// keep going
-		int index = fs->itable[cur_inode].last_used_extent;
-		while (diff!= 0){
-			// 
-			a1fs_extent* cur_extent = (a1fs_extent*)(&fs->itable[cur_inode].i_extent[index]);
-			// if diff is less than current extent, then we chop off some of curr extent and then stop
-			if ((int)cur_extent->size > diff){
-				int blocks = diff/A1FS_BLOCK_SIZE;
-				int bits = diff % A1FS_BLOCK_SIZE;
-				fs->itable[cur_inode].size -= diff;
-				//this should be able to take diff to 0, ut not a negative number... hopefully
-				diff -= cur_extent->size;
-				cur_extent->count -= blocks;
-				cur_extent->size -= bits;
-				break;
-			}else{
-				//diff is either greater or equal to the following extent, so we delete it
-				fs->itable[cur_inode].size -= cur_extent->size;
-				cur_extent->start = -1;
-				diff -= cur_extent->size;
-				cur_extent->size = 0;
-				cur_extent->count = -1; 
+				
+				// Flip the corresponding data bit to 0
+				if (set_bits(fs->sb, fs->block_bits, j, 1, 1, 0) < 0) {
+					fprintf(stderr, "a1fs_truncate: case shrinkage; set_bits failed\n");
+					return -errno;
+				}
+
+				num_db_to_unlink -= 1;
 			}
 		}
 
+		// Update the inode metadata if completely wiping out the file
+		if (size == 0) {
+			fs->itable[cur_inode].last_used_extent = -1;
+			fs->itable[cur_inode].last_used_indirect = -1;
+		}
+
+		// Update the inode size
+		fs->itable[cur_inode].size = size;
+
+		fprintf(stderr, "\na1fs_truncate: removed %ld bytes from inode\n", fs->itable[cur_inode].size );
+
+		return 0;
 	}
-	// the algorithm is thus complete
-	return 0;
+
+	return -1;
 }
 
 
@@ -823,13 +868,64 @@ static int a1fs_read(const char *path, char *buf, size_t size, off_t offset,
 	(void)fi;// unused
 	fs_ctx *fs = get_fs();
 
-	//TODO: read data from the file at given offset into the buffer
-	(void)path;
-	(void)buf;
-	(void)size;
-	(void)offset;
-	(void)fs;
-	return -ENOSYS;
+	// The inode number of the corresponding file
+	int inode_num = get_inode_num(fs, path, 0);
+	if (inode_num < 0) {
+		return -errno;
+	}
+
+	// The number of bytes left until we reach the offset byte
+	int remainingoffset = offset;
+
+	// Case that the offset is beyond EOF
+	if (offset > (int) fs->itable[inode_num].size){
+		return 0;
+	}
+	
+	// Get the extent index of the extent that contains the <offset> byte
+	int cur_extent = 0;
+	int cur_indirect_extent = -1;
+
+	// Find the extent that contains the <offset> byte
+	if (find_offset_extent(fs, inode_num, &cur_extent, &cur_indirect_extent, &remainingoffset) < 0) {
+		fprintf(stderr, "a1fs_read: find_offset_extent failed\n");
+		return -errno;
+	}
+
+	// The number of remaining bytes to be read
+	int remainingsize = size;
+
+	// Number of bytes current read
+	int read = 0;
+
+	while(remainingsize > 0){
+		// Note that <remainingoffset> is added here so we can reach the offset in first iteration
+		// so in the next extent, we set <remainingoffset> back to zero
+
+		//TODO: indirect case
+		unsigned char* extent_data = (unsigned char*)(fs->image 
+													+ fs->sb->sb_first_data_block * A1FS_BLOCK_SIZE 
+													+ fs->itable[inode_num].i_extent[cur_extent].start * A1FS_BLOCK_SIZE 
+													+ remainingoffset);
+		
+		// Read the entire extent if the remaining bytes to read allows
+		if (remainingsize > fs->itable[inode_num].i_extent[cur_extent].count * A1FS_BLOCK_SIZE - remainingoffset){
+			memcpy(buf, extent_data, size);
+			read = fs->itable[inode_num].i_extent[cur_extent].count * A1FS_BLOCK_SIZE - remainingoffset;
+			remainingsize = remainingsize - ((fs->itable[inode_num].i_extent[cur_extent].count * A1FS_BLOCK_SIZE) - remainingoffset);
+			cur_extent += 1;
+			remainingoffset = 0;
+
+		// Read the remaining size otherwise
+		}else{
+			memcpy(&buf[read], extent_data, remainingsize);
+			//set remaining to zero, we are done 
+			remainingsize = 0;
+			return size;
+		}
+
+	} 
+	return size;
 }
 
 /**
@@ -861,15 +957,111 @@ static int a1fs_write(const char *path, const char *buf, size_t size,
 {
 	(void)fi;// unused
 	fs_ctx *fs = get_fs();
+	/* 
+	Our algorithm should run like this: forget the indirect block for now
+	1. Get inode num, call truncate for a size anyays ( gotta set the zeroes first)
+	2. Travel to the offset
+		iterate through the extents until we find an extent that is bigger than our remaining offset-distance
+		Once we've found, record this distance, extent, and exit from the travel loop
+	3. call truncate if offset + size > filesize
+	4. begin writing, filling cur extent first, and then the next appropriate extent after calling truncate
+	5. return bytes written
+	*/
 
-	//TODO: write data from the buffer into the file at given offset, possibly
-	// "zeroing out" the uninitialized range
-	(void)path;
-	(void)buf;
-	(void)size;
-	(void)offset;
-	(void)fs;
-	return -ENOSYS;
+	// The inode number of the corresponding file
+	int inode_num = get_inode_num(fs, path, 0);
+	if (inode_num < 0) {
+		return -errno;
+	}
+
+	// The number of bytes left until we reach the offset byte
+	int remainingoffset = offset;
+
+	// Case that the offset plus the number of bytes to write is beyond EOF
+	if (offset + size > (long unsigned int) fs->itable[inode_num].size){
+		if (a1fs_truncate(path, size + offset) != 0){
+			return -ENOSPC;
+		}
+	}
+	
+	// Get the extent index of the extent that contains the <offset> byte
+	int cur_extent = 0;
+	int cur_indirect_extent = -1;
+
+	// Find the extent that contains the <offset> byte
+	if (find_offset_extent(fs, inode_num, &cur_extent, &cur_indirect_extent, &remainingoffset) < 0) {
+		fprintf(stderr, "a1fs_write: find_offset_extent failed\n");
+		return -errno;
+	}
+
+	// The number of remaining bytes to be write
+	int remainingsize = size;
+
+	// Number of bytes currently written
+	int written = 0;
+
+	while(remainingsize > 0){
+		// Note that <remainingoffset> is added here so we can reach the offset in first iteration
+		// so in the next extent, we set <remainingoffset> back to zero
+
+		//TODO: indirect case
+		unsigned char* extent_data = (unsigned char*)(fs->image 
+														+ fs->sb->sb_first_data_block * A1FS_BLOCK_SIZE 
+														+ fs->itable[inode_num].i_extent[cur_extent].start * A1FS_BLOCK_SIZE 
+														+ remainingoffset);
+		
+		// Write the entire extent if the remaining bytes to read allows
+		if (remainingsize > fs->itable[inode_num].i_extent[cur_extent].count * A1FS_BLOCK_SIZE - remainingoffset){
+			memcpy(extent_data + remainingoffset, buf, fs->itable[inode_num].i_extent[cur_extent].count * A1FS_BLOCK_SIZE - remainingoffset);
+			written = fs->itable[inode_num].i_extent[cur_extent].count * A1FS_BLOCK_SIZE - remainingoffset;
+			remainingsize = remainingsize - ((fs->itable[inode_num].i_extent[cur_extent].count * A1FS_BLOCK_SIZE) - remainingoffset);
+			cur_extent += 1;
+			remainingoffset = 0;
+
+		// Write the remaining size otherwise
+		}else{
+			memcpy(extent_data, &buf[written], remainingsize);
+			//set remaining to zero, we are done 
+			remainingsize = 0;
+			return size;
+		}
+
+	} 
+	return size;
+
+	// int inode_num = get_inode_num(fs, path, 0);
+	// fprintf(stderr, "a1fs_write: size = %ld, offset = %ld inode size = %ld, inode num = %d\n", size , offset, fs->itable[inode_num].size, inode_num);
+	// //set remaining
+	// // remaining size is the number of remaining bytes to be written
+	// int remainingsize = size;
+	// // remainingoffset is the distance of remaining bytes, until we reach the correct extent
+	// int remainingoffset = offset;
+	// int cur_extent = 0;
+	// // if there is no extent yet in this file, make one first...call truncate instead
+	// // 	we should only call truncate if the write will end up out of bounds
+	// if (offset + size > fs->itable[inode_num].size){
+	// 	fprintf(stderr, "\na1fs_write: recognized an empty file; size = %ld, offset = %ld, inode size = %ld\n", size , offset, fs->itable[inode_num].size);
+	// 	if (a1fs_truncate(path, size + offset) != 0){
+	// 		return -ENOSPC;
+	// 	}
+	// }
+	// // traveling to extent
+	// while(remainingoffset > 0){
+	// 	//if current extent is smaller than the remaining offset, then it's not in this extent, so increment
+	// 	if (fs->itable[inode_num].i_extent[cur_extent].size < remainingoffset){
+	// 		//decrease offset by the extent we just passed
+	// 		remainingoffset -= fs->itable[inode_num].i_extent[cur_extent].size;
+	// 		// goto next extent
+	// 		cur_extent++;
+	// 	}else{// otherwise, we have found, since current extent is greater or equal to remaining offset, 
+	// 		//since its in this extent, lets break out, we now have the offset from within the extent(remainingsize), and the current
+	// 		//extent in cur_extent
+	// 		break;
+	// 	}
+	// }
+	// //first set the uninitialized zone to null
+	// //once we are here we have found the correct extent, as well as the offset. time to write...
+	// int written = 0;
 }
 
 
@@ -902,3 +1094,5 @@ int main(int argc, char *argv[])
 
 	return fuse_main(args.argc, args.argv, &a1fs_ops, &fs);
 }
+
+// The TA is never gonna see this!
